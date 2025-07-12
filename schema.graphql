@@ -1,0 +1,105 @@
+type Token @entity(immutable: true) {
+  id: Bytes!                 # Token address
+  symbol: String!             # e.g. "WETH"
+  decimals: BigInt!           # e.g. 18
+}
+
+type HookPosition @entity(immutable: false) {
+  id: ID!                     # Composite ID: poolId-owner-tickLower-tickUpper-salt
+  pool: Bytes!                # PoolId (bytes32)
+  owner: Bytes!               # address (EOA)
+  hook: Bytes!                # address (the hardcoded hook ID)
+  currency0: Token!           # Link to Token entity for currency0
+  currency1: Token!           # Link to Token entity for currency1
+  tickLower: Int!             # int24
+  tickUpper: Int!             # int24
+  liquidity: BigInt!          # Current liquidity of this position
+  salt: Bytes!                # bytes32
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+type TrackedPool @entity(immutable: false) {
+  id: Bytes!                  # PoolId (bytes32) - This will be the Pool's ID
+  currency0: Token!           # Link to Token entity for currency0
+  currency1: Token!           # Link to Token entity for currency1
+  
+  # Pool state for calculations
+  sqrtPriceX96: BigInt!       # Current sqrt price * 2^96 (from swap events)
+  tick: Int!                  # Current tick (derived from sqrtPriceX96)
+  liquidity: BigInt!          # Current active liquidity (from modify events)
+  
+  currentFeeRateBps: BigInt!  # Stores the latest fee rate in Basis Points
+  feeUpdates: [FeeUpdate!]! @derivedFrom(field: "pool") # For full history
+  
+  # Total Value Locked (properly calculated from liquidity + tick ranges)
+  totalValueLockedToken0: BigDecimal! # Total amount of token0 locked in pool
+  totalValueLockedToken1: BigDecimal! # Total amount of token1 locked in pool
+  
+  # DEPRECATED fields - use totalValueLockedToken0/1 instead
+  tvlToken0: BigDecimal!      # Current amount of token0 in pool (derived from events)
+  tvlToken1: BigDecimal!      # Current amount of token1 in pool (derived from events)
+  
+  # Statistics
+  txCount: BigInt!            # Number of transactions in this pool
+  
+  # DEPRECATED: Remove USD calculations to avoid stablecoin depeg risks
+  # tvlUSD field removed - calculate externally using price oracles
+}
+
+# --- New Entities for Volume Tracking ---
+
+# Represents a single Swap event
+type Swap @entity(immutable: true) {
+  id: ID!                     # Transaction hash + log index
+  pool: TrackedPool!          # Link to the Pool entity that this swap occurred in
+  timestamp: BigInt!          # Timestamp of the block the swap occurred in
+  amount0: BigInt!            # Amount of token0 swapped (can be negative)
+  amount1: BigInt!            # Amount of token1 swapped (can be negative)
+  
+  # Pool state at time of swap
+  sqrtPriceX96: BigInt!       # sqrtPrice after swap * 2^96
+  liquidity: BigInt!          # Active liquidity at time of swap
+  tick: Int!                  # Tick after swap
+  
+  sender: Bytes!              # Address that initiated the swap
+  recipient: Bytes!           # Address that received the tokens (derived from sender)
+  
+  # DEPRECATED: Remove USD calculations to avoid stablecoin depeg risks
+  # amountUSD and feesUSD fields removed - calculate externally using price oracles
+  
+  blockNumber: BigInt!
+  blockTimestamp: BigInt!
+  transactionHash: Bytes!
+}
+
+# Aggregates pool data for a single day
+type PoolDayData @entity(immutable: false) {
+  id: ID!                     # Pool ID + timestamp (floored to start of day)
+  date: Int!                  # Unix timestamp for the start of the day
+  pool: TrackedPool!          # Link to the Pool entity
+  
+  # Raw token volumes (no USD conversion)
+  volumeToken0: BigDecimal!   # Total volume in token0 for this day
+  volumeToken1: BigDecimal!   # Total volume in token1 for this day
+  
+  # TVL at end of day (raw token amounts)
+  tvlToken0: BigDecimal!      # Total Value Locked in token0 at end of day
+  tvlToken1: BigDecimal!      # Total Value Locked in token1 at end of day
+  
+  currentFeeRateBps: BigInt!  # Fee rate at the end of the day
+  
+  # DEPRECATED: Remove USD calculations to avoid stablecoin depeg risks
+  # volumeUSD, feesUSD, tvlUSD fields removed - calculate externally using price oracles
+}
+
+# --- New Entity for Fee Update Tracking ---
+
+type FeeUpdate @entity(immutable: true) {
+  id: ID! # tx hash + log index
+  pool: TrackedPool! # Link to the pool
+  timestamp: BigInt!
+  newFeeRateBps: BigInt! # Storing as BigInt, e.g., 3000 for 0.3%
+  transactionHash: Bytes!
+}
