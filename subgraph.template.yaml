@@ -6,11 +6,11 @@ schema:
 dataSources:
   - kind: ethereum
     name: PoolManager
-    network: base-sepolia
+    network: {{NETWORK}}
     source:
-      address: "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408"
+      address: "{{POOL_MANAGER_ADDRESS}}"
       abi: PoolManager
-      startBlock: 25679774
+      startBlock: {{POOL_MANAGER_START_BLOCK}}
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9
@@ -36,11 +36,11 @@ dataSources:
       file: ./src/pool-manager.ts
   - kind: ethereum
     name: AlphixHook
-    network: base-sepolia
+    network: {{NETWORK}}
     source:
-      address: "0xd450f7f8e4C11EE8620a349f73e7aC3905Dfd000"
+      address: "{{ALPHIX_HOOK_ADDRESS}}"
       abi: AlphixHook
-      startBlock: 25751472
+      startBlock: {{ALPHIX_HOOK_START_BLOCK}}
     mapping:
       kind: ethereum/events
       apiVersion: 0.0.9

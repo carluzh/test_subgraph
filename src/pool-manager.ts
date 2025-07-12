@@ -8,6 +8,9 @@ import {
   getAmount1 
 } from "./tick-math";
 
+// Import configuration helpers
+import { NetworkConfig, TokenConfig, PoolConfig } from "./config";
+
 // Import event types from the contract ABI
 import {
   Initialize as InitializeEvent,
@@ -23,7 +26,6 @@ import { HookPosition, TrackedPool, Token, Swap, PoolDayData, FeeUpdate } from "
 
 // Import contract types generated from ABIs
 import { ERC20 } from "../generated/PoolManager/ERC20"; // ERC20 ABI
-import { StateView } from "../generated/PoolManager/StateView"; // Import StateView contract type
 
 // Helper function to convert token amounts to decimal with proper scaling
 function convertTokenToDecimal(tokenAmount: BigInt, exchangeDecimals: BigInt): BigDecimal {
@@ -33,28 +35,8 @@ function convertTokenToDecimal(tokenAmount: BigInt, exchangeDecimals: BigInt): B
   return tokenAmount.toBigDecimal().div(BigInt.fromI32(10).pow(exchangeDecimals.toI32() as u8).toBigDecimal());
 }
 
-// Hardcoded Hook ID to filter by
-const HARDCODED_HOOK_ID_STRING = "0x94ba380a340E020Dc29D7883f01628caBC975000";
-const HARDCODED_HOOK_ID_BYTES = Bytes.fromHexString(HARDCODED_HOOK_ID_STRING);
-
-// Token addresses and USD prices
-const BTCRL_ADDRESS = Bytes.fromHexString("0x13c26fb69d48ed5a72ce3302fc795082e2427f4d");
-const YUSDC_ADDRESS = Bytes.fromHexString("0x663cf82e49419a3dc88eec65c2155b4b2d0fa335");
-const MUSDT_ADDRESS = Bytes.fromHexString("0xbaabfA3Ac2Ed3d0154e9E2002f94D8550A79bfa8");
-const AETH_ADDRESS = Bytes.fromHexString("0x28c00749Cb9066d240fE1270b6D7f294b8b34D99");
-const ETH_ADDRESS = Bytes.fromHexString("0x0000000000000000000000000000000000000000");
-
-// USD stable token prices (fixed at $1.00)
-const YUSDC_USD_PRICE = BigDecimal.fromString("1.0");
-const MUSDT_USD_PRICE = BigDecimal.fromString("1.0");
-
-// Pool IDs for price derivation
-const YUSDC_MUSDT_POOL_ID = Bytes.fromHexString("0xc176e54fee5a41917ae5244d8235e0bda1885de86b47f540a09552119d832e6d");
-const MUSDT_AETH_POOL_ID = Bytes.fromHexString("0x60F36C23D5131AE2EA1CD668AE4013081FD24B9CF94190BB6E08ECE00B8DC27C");
-const MUSDT_ETH_POOL_ID = Bytes.fromHexString("0xB0679FC770CC387A0DE3099368FD7AD8BD0EFB599525C40F3586AFF55D797EB1");
-
-// --- StateView Contract Address ---
-const STATEVIEW_CONTRACT_ADDRESS = Address.fromString('0x571291b572ed32ce6751a2cb2486ebee8defb9b4');
+// Configuration is now imported from ./config.ts
+// All hardcoded addresses have been moved to NetworkConfig, TokenConfig, and PoolConfig classes
 
 // Helper function to fetch token details
 function fetchTokenDetails(tokenAddress: Address): Token {
@@ -153,27 +135,25 @@ function getTokenBalance(tokenAddress: Address, accountAddress: Address): BigInt
 // Helper function to get USD price for any supported token
 function getTokenPriceUSD(tokenAddress: Bytes): BigDecimal {
     // USD stable tokens are always $1.00
-    if (tokenAddress.equals(YUSDC_ADDRESS) || tokenAddress.equals(MUSDT_ADDRESS)) {
-        return BigDecimal.fromString("1.0");
+    if (NetworkConfig.isStableToken(tokenAddress)) {
+        return NetworkConfig.getStableTokenPrice(tokenAddress);
     }
     
-    // For other tokens, derive price from relevant pools
-    let stateViewContract = StateView.bind(STATEVIEW_CONTRACT_ADDRESS);
-    
-    if (tokenAddress.equals(AETH_ADDRESS)) {
-        // Derive aETH price from mUSDT/aETH pool
-        let getSlot0Call = stateViewContract.try_getSlot0(MUSDT_AETH_POOL_ID);
-        if (!getSlot0Call.reverted) {
-            return deriveTokenPriceFromUsdPool(getSlot0Call.value.value0.toBigDecimal(), MUSDT_AETH_POOL_ID, AETH_ADDRESS, MUSDT_ADDRESS);
-        }
-    } else if (tokenAddress.equals(ETH_ADDRESS)) {
-        // Derive ETH price from mUSDT/ETH pool
-        let getSlot0Call = stateViewContract.try_getSlot0(MUSDT_ETH_POOL_ID);
-        if (!getSlot0Call.reverted) {
-            return deriveTokenPriceFromUsdPool(getSlot0Call.value.value0.toBigDecimal(), MUSDT_ETH_POOL_ID, ETH_ADDRESS, MUSDT_ADDRESS);
-        }
+    // For now, return zero for non-stable tokens as price derivation logic needs to be implemented
+    // TODO: Implement price derivation from reference pools using PoolManager or other contracts
+    if (tokenAddress.equals(NetworkConfig.aethAddress())) {
+        // Can be derived from aUSDT/aETH pool
+        log.info("Price derivation for aETH not yet implemented", []);
+        return BigDecimal.zero();
+    } else if (tokenAddress.equals(NetworkConfig.ethAddress())) {
+        // Can be derived from ETH/aUSDT pool
+        log.info("Price derivation for ETH not yet implemented", []);
+        return BigDecimal.zero();
+    } else if (tokenAddress.equals(NetworkConfig.abtcAddress())) {
+        // Can be derived from aBTC/aETH pool or aUSDC/aBTC pool
+        log.info("Price derivation for aBTC not yet implemented", []);
+        return BigDecimal.zero();
     }
-    // For BTCRL, we'll handle it in a separate function since we need to find the pool dynamically
     
     log.warning("Unable to derive USD price for token: {}", [tokenAddress.toHexString()]);
     return BigDecimal.zero();
@@ -215,8 +195,8 @@ function deriveTokenPriceFromUsdPool(sqrtPriceX96: BigDecimal, poolId: Bytes, ta
 // Context-aware helper to get USD price for tokens, using current pool if it contains reference tokens
 function getTokenPriceUSDWithContext(tokenAddress: Bytes, contextPoolId: Bytes): BigDecimal {
     // USD stable tokens are always $1.00
-    if (tokenAddress.equals(YUSDC_ADDRESS) || tokenAddress.equals(MUSDT_ADDRESS)) {
-        return BigDecimal.fromString("1.0");
+    if (NetworkConfig.isStableToken(tokenAddress)) {
+        return NetworkConfig.getStableTokenPrice(tokenAddress);
     }
     
     // Check if we can derive price from the current pool context
@@ -226,14 +206,12 @@ function getTokenPriceUSDWithContext(tokenAddress: Bytes, contextPoolId: Bytes):
         let token1 = Token.load(contextPool.currency1)!;
         
         // If current pool contains the target token + a USD token, derive price from it
-        if ((token0.id.equals(tokenAddress) && (token1.id.equals(YUSDC_ADDRESS) || token1.id.equals(MUSDT_ADDRESS))) ||
-            (token1.id.equals(tokenAddress) && (token0.id.equals(YUSDC_ADDRESS) || token0.id.equals(MUSDT_ADDRESS)))) {
+        if ((token0.id.equals(tokenAddress) && NetworkConfig.isStableToken(token1.id)) ||
+            (token1.id.equals(tokenAddress) && NetworkConfig.isStableToken(token0.id))) {
             
-            let stateViewContract = StateView.bind(STATEVIEW_CONTRACT_ADDRESS);
-            let getSlot0Call = stateViewContract.try_getSlot0(contextPoolId);
-            if (!getSlot0Call.reverted) {
-                return deriveTokenPriceFromPool(getSlot0Call.value.value0.toBigDecimal(), contextPoolId, tokenAddress);
-            }
+            // TODO: Implement price derivation from pool context using PoolManager or other contracts
+            log.info("Context-based price derivation not yet implemented for token: {}", [tokenAddress.toHexString()]);
+            return BigDecimal.zero();
         }
     }
     
@@ -260,11 +238,11 @@ function deriveTokenPriceFromPool(sqrtPriceX96: BigDecimal, poolId: Bytes, targe
     let adjustedPriceOfToken1InToken0 = priceOfToken1InToken0.times(priceAdjustmentFactor);
     
     // Determine which token is our target and which is USD
-    if (token0.id.equals(targetTokenAddress) && (token1.id.equals(YUSDC_ADDRESS) || token1.id.equals(MUSDT_ADDRESS))) {
+    if (token0.id.equals(targetTokenAddress) && NetworkConfig.isStableToken(token1.id)) {
         // Target token is token0, USD token is token1
         // Price of target = 1 / (price of token1 in token0) = 1 / adjustedPrice
         return BigDecimal.fromString("1.0").div(adjustedPriceOfToken1InToken0);
-    } else if (token1.id.equals(targetTokenAddress) && (token0.id.equals(YUSDC_ADDRESS) || token0.id.equals(MUSDT_ADDRESS))) {
+    } else if (token1.id.equals(targetTokenAddress) && NetworkConfig.isStableToken(token0.id)) {
         // Target token is token1, USD token is token0
         // Price of target = price of token1 in token0 = adjustedPrice
         return adjustedPriceOfToken1InToken0;
@@ -302,7 +280,7 @@ function calculateTvlUSD(poolId: Bytes, poolAddress: Address, blockTimestamp: Bi
 }
 
 export function handleInitialize(event: InitializeEvent): void {
-  if (event.params.hooks.equals(HARDCODED_HOOK_ID_BYTES)) {
+  if (event.params.hooks.equals(NetworkConfig.hardcodedHookIdBytes())) {
     let pool = new TrackedPool(event.params.id);
     let token0 = fetchTokenDetails(event.params.currency0);
     let token1 = fetchTokenDetails(event.params.currency1);
@@ -356,7 +334,7 @@ export function handleModifyLiquidity(event: ModifyLiquidityEvent): void {
       position = new HookPosition(positionIdString);
       position.pool = poolIdBytes;
       position.owner = eoaOwnerAddress;
-      position.hook = HARDCODED_HOOK_ID_BYTES;
+      position.hook = NetworkConfig.hardcodedHookIdBytes();
       position.currency0 = trackedPool.currency0;
       position.currency1 = trackedPool.currency1;
       position.tickLower = tickLower;
