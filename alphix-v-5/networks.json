@@ -1,8 +1,0 @@
-{
-  "base-sepolia": {
-    "PoolManager": {
-      "address": "0x05E73354cFDd6745C338b50BcFDfA3Aa6fA03408",
-      "startBlock": 19088197
-    }
-  }
-}

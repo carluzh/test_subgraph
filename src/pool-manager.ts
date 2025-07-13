@@ -8,8 +8,24 @@ import {
   getAmount1 
 } from "./tick-math";
 
-// Import configuration helpers
-import { NetworkConfig, TokenConfig, PoolConfig } from "./config";
+// Import centralized constants
+import {
+  HARDCODED_HOOK_ID_STRING,
+  HARDCODED_HOOK_ID_BYTES,
+  aUSDC_ADDRESS,
+  aUSDT_ADDRESS,
+  aETH_ADDRESS,
+  aBTC_ADDRESS,
+  ETH_ADDRESS,
+  aUSDC_USD_PRICE,
+  aUSDT_USD_PRICE,
+  aUSDC_aUSDT_POOL_ID,
+  aUSDT_aETH_POOL_ID,
+  aBTC_aETH_POOL_ID,
+  aUSDC_aBTC_POOL_ID,
+  ETH_aUSDT_POOL_ID,
+  STATEVIEW_CONTRACT_ADDRESS
+} from "./constants";
 
 // Import event types from the contract ABI
 import {
@@ -26,6 +42,7 @@ import { HookPosition, TrackedPool, Token, Swap, PoolDayData, FeeUpdate } from "
 
 // Import contract types generated from ABIs
 import { ERC20 } from "../generated/PoolManager/ERC20"; // ERC20 ABI
+import { StateView } from "../generated/PoolManager/StateView"; // Import StateView contract type
 
 // Helper function to convert token amounts to decimal with proper scaling
 function convertTokenToDecimal(tokenAmount: BigInt, exchangeDecimals: BigInt): BigDecimal {
@@ -35,8 +52,7 @@ function convertTokenToDecimal(tokenAmount: BigInt, exchangeDecimals: BigInt): B
   return tokenAmount.toBigDecimal().div(BigInt.fromI32(10).pow(exchangeDecimals.toI32() as u8).toBigDecimal());
 }
 
-// Configuration is now imported from ./config.ts
-// All hardcoded addresses have been moved to NetworkConfig, TokenConfig, and PoolConfig classes
+// All constants are now imported from ./constants.ts
 
 // Helper function to fetch token details
 function fetchTokenDetails(tokenAddress: Address): Token {
@@ -45,7 +61,7 @@ function fetchTokenDetails(tokenAddress: Address): Token {
     token = new Token(tokenAddress);
     
     // Handle native ETH (zero address) as a special case
-    if (tokenAddress.toHexString() == "0x0000000000000000000000000000000000000000") {
+    if (tokenAddress.toHexString() == ETH_ADDRESS.toHexString()) {
       token.symbol = "ETH";
       token.decimals = BigInt.fromI32(18);
       log.info("Detected native ETH token", []);
@@ -113,7 +129,7 @@ function getTokenBalance(tokenAddress: Address, accountAddress: Address): BigInt
     log.warning("getTokenBalance() called - this function returns aggregate balances for ALL pools in V4, not pool-specific balances", []);
     
     // Handle native ETH (zero address) as a special case
-    if (tokenAddress.toHexString() == "0x0000000000000000000000000000000000000000") {
+    if (tokenAddress.toHexString() == ETH_ADDRESS.toHexString()) {
         log.warning("ETH balance requested - V4 PoolManager holds ETH for all pools, not pool-specific", []);
         return BigInt.fromI32(0);
     } else {
@@ -135,25 +151,27 @@ function getTokenBalance(tokenAddress: Address, accountAddress: Address): BigInt
 // Helper function to get USD price for any supported token
 function getTokenPriceUSD(tokenAddress: Bytes): BigDecimal {
     // USD stable tokens are always $1.00
-    if (NetworkConfig.isStableToken(tokenAddress)) {
-        return NetworkConfig.getStableTokenPrice(tokenAddress);
+    if (tokenAddress.equals(aUSDC_ADDRESS) || tokenAddress.equals(aUSDT_ADDRESS)) {
+        return BigDecimal.fromString("1.0");
     }
     
-    // For now, return zero for non-stable tokens as price derivation logic needs to be implemented
-    // TODO: Implement price derivation from reference pools using PoolManager or other contracts
-    if (tokenAddress.equals(NetworkConfig.aethAddress())) {
-        // Can be derived from aUSDT/aETH pool
-        log.info("Price derivation for aETH not yet implemented", []);
-        return BigDecimal.zero();
-    } else if (tokenAddress.equals(NetworkConfig.ethAddress())) {
-        // Can be derived from ETH/aUSDT pool
-        log.info("Price derivation for ETH not yet implemented", []);
-        return BigDecimal.zero();
-    } else if (tokenAddress.equals(NetworkConfig.abtcAddress())) {
-        // Can be derived from aBTC/aETH pool or aUSDC/aBTC pool
-        log.info("Price derivation for aBTC not yet implemented", []);
-        return BigDecimal.zero();
+    // For other tokens, derive price from relevant pools
+    let stateViewContract = StateView.bind(STATEVIEW_CONTRACT_ADDRESS);
+    
+    if (tokenAddress.equals(aETH_ADDRESS)) {
+        // Derive aETH price from aUSDT/aETH pool
+        let getSlot0Call = stateViewContract.try_getSlot0(aUSDT_aETH_POOL_ID);
+        if (!getSlot0Call.reverted) {
+            return deriveTokenPriceFromUsdPool(getSlot0Call.value.value0.toBigDecimal(), aUSDT_aETH_POOL_ID, aETH_ADDRESS, aUSDT_ADDRESS);
+        }
+    } else if (tokenAddress.equals(ETH_ADDRESS)) {
+                // Derive ETH price from ETH/aUSDT pool
+        let getSlot0Call = stateViewContract.try_getSlot0(ETH_aUSDT_POOL_ID);
+        if (!getSlot0Call.reverted) {
+            return deriveTokenPriceFromUsdPool(getSlot0Call.value.value0.toBigDecimal(), ETH_aUSDT_POOL_ID, ETH_ADDRESS, aUSDT_ADDRESS);
+        }
     }
+    // For aBTC, we'll handle it in a separate function since we need to find the pool dynamically
     
     log.warning("Unable to derive USD price for token: {}", [tokenAddress.toHexString()]);
     return BigDecimal.zero();
@@ -195,8 +213,8 @@ function deriveTokenPriceFromUsdPool(sqrtPriceX96: BigDecimal, poolId: Bytes, ta
 // Context-aware helper to get USD price for tokens, using current pool if it contains reference tokens
 function getTokenPriceUSDWithContext(tokenAddress: Bytes, contextPoolId: Bytes): BigDecimal {
     // USD stable tokens are always $1.00
-    if (NetworkConfig.isStableToken(tokenAddress)) {
-        return NetworkConfig.getStableTokenPrice(tokenAddress);
+    if (tokenAddress.equals(aUSDC_ADDRESS) || tokenAddress.equals(aUSDT_ADDRESS)) {
+        return BigDecimal.fromString("1.0");
     }
     
     // Check if we can derive price from the current pool context
@@ -206,12 +224,14 @@ function getTokenPriceUSDWithContext(tokenAddress: Bytes, contextPoolId: Bytes):
         let token1 = Token.load(contextPool.currency1)!;
         
         // If current pool contains the target token + a USD token, derive price from it
-        if ((token0.id.equals(tokenAddress) && NetworkConfig.isStableToken(token1.id)) ||
-            (token1.id.equals(tokenAddress) && NetworkConfig.isStableToken(token0.id))) {
+        if ((token0.id.equals(tokenAddress) && (token1.id.equals(aUSDC_ADDRESS) || token1.id.equals(aUSDT_ADDRESS))) ||
+            (token1.id.equals(tokenAddress) && (token0.id.equals(aUSDC_ADDRESS) || token0.id.equals(aUSDT_ADDRESS)))) {
             
-            // TODO: Implement price derivation from pool context using PoolManager or other contracts
-            log.info("Context-based price derivation not yet implemented for token: {}", [tokenAddress.toHexString()]);
-            return BigDecimal.zero();
+            let stateViewContract = StateView.bind(STATEVIEW_CONTRACT_ADDRESS);
+            let getSlot0Call = stateViewContract.try_getSlot0(contextPoolId);
+            if (!getSlot0Call.reverted) {
+                return deriveTokenPriceFromPool(getSlot0Call.value.value0.toBigDecimal(), contextPoolId, tokenAddress);
+            }
         }
     }
     
@@ -238,11 +258,11 @@ function deriveTokenPriceFromPool(sqrtPriceX96: BigDecimal, poolId: Bytes, targe
     let adjustedPriceOfToken1InToken0 = priceOfToken1InToken0.times(priceAdjustmentFactor);
     
     // Determine which token is our target and which is USD
-    if (token0.id.equals(targetTokenAddress) && NetworkConfig.isStableToken(token1.id)) {
+    if (token0.id.equals(targetTokenAddress) && (token1.id.equals(aUSDC_ADDRESS) || token1.id.equals(aUSDT_ADDRESS))) {
         // Target token is token0, USD token is token1
         // Price of target = 1 / (price of token1 in token0) = 1 / adjustedPrice
         return BigDecimal.fromString("1.0").div(adjustedPriceOfToken1InToken0);
-    } else if (token1.id.equals(targetTokenAddress) && NetworkConfig.isStableToken(token0.id)) {
+    } else if (token1.id.equals(targetTokenAddress) && (token0.id.equals(aUSDC_ADDRESS) || token0.id.equals(aUSDT_ADDRESS))) {
         // Target token is token1, USD token is token0
         // Price of target = price of token1 in token0 = adjustedPrice
         return adjustedPriceOfToken1InToken0;
@@ -280,7 +300,7 @@ function calculateTvlUSD(poolId: Bytes, poolAddress: Address, blockTimestamp: Bi
 }
 
 export function handleInitialize(event: InitializeEvent): void {
-  if (event.params.hooks.equals(NetworkConfig.hardcodedHookIdBytes())) {
+  if (event.params.hooks.equals(HARDCODED_HOOK_ID_BYTES)) {
     let pool = new TrackedPool(event.params.id);
     let token0 = fetchTokenDetails(event.params.currency0);
     let token1 = fetchTokenDetails(event.params.currency1);
@@ -334,7 +354,7 @@ export function handleModifyLiquidity(event: ModifyLiquidityEvent): void {
       position = new HookPosition(positionIdString);
       position.pool = poolIdBytes;
       position.owner = eoaOwnerAddress;
-      position.hook = NetworkConfig.hardcodedHookIdBytes();
+      position.hook = HARDCODED_HOOK_ID_BYTES;
       position.currency0 = trackedPool.currency0;
       position.currency1 = trackedPool.currency1;
       position.tickLower = tickLower;
@@ -436,56 +456,24 @@ export function handleSwap(event: SwapEvent): void {
   swap.blockTimestamp = event.block.timestamp;
   swap.transactionHash = event.transaction.hash;
 
-  let amount0_bd = event.params.amount0.toBigDecimal();
-  let amount1_bd = event.params.amount1.toBigDecimal();
-  let feeRateBps = trackedPool.currentFeeRateBps.toBigDecimal(); 
-
   let token0 = Token.load(trackedPool.currency0)!;
   let token1 = Token.load(trackedPool.currency1)!;
 
-  // Get USD prices for both tokens using context-aware pricing
-  let token0PriceUSD = getTokenPriceUSDWithContext(token0.id, poolId);
-  let token1PriceUSD = getTokenPriceUSDWithContext(token1.id, poolId);
+  // CRITICAL: Convert swap amounts to TVL changes (following official Uniswap V4 approach)
+  // Unlike V3, negative amount represents amount being sent to pool, so invert the sign
+  let amount0 = convertTokenToDecimal(event.params.amount0, token0.decimals).times(BigDecimal.fromString('-1'));
+  let amount1 = convertTokenToDecimal(event.params.amount1, token1.decimals).times(BigDecimal.fromString('-1'));
 
-  log.info("Swap Vol Calc: Pool {} - Token prices: {} = ${}, {} = ${}", [
-      poolId.toHexString(),
-      token0.symbol, token0PriceUSD.toString(),
-      token1.symbol, token1PriceUSD.toString()
-  ]);
+  // Update pool transaction count  
+  trackedPool.txCount = trackedPool.txCount.plus(BigInt.fromI32(1));
 
-  // Convert raw amounts to adjusted amounts (accounting for decimals)
-  let amount0Adjusted = amount0_bd.div(BigInt.fromI32(10).pow(token0.decimals.toI32() as u8).toBigDecimal());
-  let amount1Adjusted = amount1_bd.div(BigInt.fromI32(10).pow(token1.decimals.toI32() as u8).toBigDecimal());
-
-  // Calculate USD volumes for both sides of the swap
-  let volume0USD = amount0Adjusted.times(token0PriceUSD);
-  let volume1USD = amount1Adjusted.times(token1PriceUSD);
-
-  // Take absolute values since we want volume, not directional amounts
-  if (volume0USD.lt(BigDecimal.zero())) {
-      volume0USD = volume0USD.times(BigDecimal.fromString("-1.0"));
-  }
-  if (volume1USD.lt(BigDecimal.zero())) {
-      volume1USD = volume1USD.times(BigDecimal.fromString("-1.0"));
-  }
-
-  // Use the larger of the two USD volumes (they should be approximately equal in a well-functioning pool)
-  // But we prefer the volume from the token with a non-zero price
-  let amountUSD = BigDecimal.zero();
-  if (token0PriceUSD.gt(BigDecimal.zero()) && token1PriceUSD.gt(BigDecimal.zero())) {
-      // Both tokens have prices, use the average
-      amountUSD = volume0USD.plus(volume1USD).div(BigDecimal.fromString("2.0"));
-  } else if (token0PriceUSD.gt(BigDecimal.zero())) {
-      // Only token0 has a price
-      amountUSD = volume0USD;
-  } else if (token1PriceUSD.gt(BigDecimal.zero())) {
-      // Only token1 has a price
-      amountUSD = volume1USD;
-  } else {
-      // Neither token has a price
-      log.warning("Swap event for unsupported token pair (no USD prices available): {}", [poolId.toHexString()]);
-      amountUSD = BigDecimal.zero();
-  }
+  // Update pool TVL with swap token flows - THIS IS THE KEY MISSING PIECE!
+  trackedPool.totalValueLockedToken0 = trackedPool.totalValueLockedToken0.plus(amount0);
+  trackedPool.totalValueLockedToken1 = trackedPool.totalValueLockedToken1.plus(amount1);
+  
+  // Also update deprecated TVL fields for backward compatibility
+  trackedPool.tvlToken0 = trackedPool.totalValueLockedToken0;
+  trackedPool.tvlToken1 = trackedPool.totalValueLockedToken1;
 
   // Store pool state at time of swap
   swap.sqrtPriceX96 = event.params.sqrtPriceX96;
@@ -497,25 +485,25 @@ export function handleSwap(event: SwapEvent): void {
   trackedPool.tick = event.params.tick;
   trackedPool.liquidity = event.params.liquidity;
 
-  log.info("Swap in pool {}: {} {} for {} {}", [
+  log.info("Swap in pool {}: {} {} for {} {} | Updated TVL: {} {} / {} {}", [
       poolId.toHexString(),
-      amount0Adjusted.toString(),
-      token0.symbol,
-      amount1Adjusted.toString(), 
-      token1.symbol
+      amount0.toString(), token0.symbol,
+      amount1.toString(), token1.symbol,
+      trackedPool.totalValueLockedToken0.toString(), token0.symbol,
+      trackedPool.totalValueLockedToken1.toString(), token1.symbol
   ]);
 
   // Update pool day data with raw token volumes
   let poolDayData = getOrCreatePoolDayData(poolId, swap.timestamp);
   
-  // Add absolute values of swapped amounts to daily volume
-  let absAmount0 = amount0Adjusted.lt(BigDecimal.zero()) ? amount0Adjusted.times(BigDecimal.fromString("-1")) : amount0Adjusted;
-  let absAmount1 = amount1Adjusted.lt(BigDecimal.zero()) ? amount1Adjusted.times(BigDecimal.fromString("-1")) : amount1Adjusted;
+  // Add absolute values of swapped amounts to daily volume  
+  let absAmount0 = amount0.lt(BigDecimal.zero()) ? amount0.times(BigDecimal.fromString("-1")) : amount0;
+  let absAmount1 = amount1.lt(BigDecimal.zero()) ? amount1.times(BigDecimal.fromString("-1")) : amount1;
   
   poolDayData.volumeToken0 = poolDayData.volumeToken0.plus(absAmount0);
   poolDayData.volumeToken1 = poolDayData.volumeToken1.plus(absAmount1); 
 
-  // Update TVL in pool day data (already maintained in pool entity)
+  // Update TVL in pool day data to reflect current values after swap
   poolDayData.tvlToken0 = trackedPool.tvlToken0;
   poolDayData.tvlToken1 = trackedPool.tvlToken1;
   poolDayData.currentFeeRateBps = trackedPool.currentFeeRateBps;

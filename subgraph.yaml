@@ -3,6 +3,7 @@ indexerHints:
   prune: auto
 schema:
   file: ./schema.graphql
+# NOTE: Contract addresses and startBlocks below should be kept in sync with data.json
 dataSources:
   - kind: ethereum
     name: PoolManager
@@ -26,6 +27,8 @@ dataSources:
           file: ./abis/PoolManager.json
         - name: ERC20
           file: ./abis/ERC20.json
+        - name: StateView
+          file: ./abis/StateView.json
       eventHandlers:
         - event: Initialize(indexed bytes32,indexed address,indexed address,uint24,int24,address,uint160,int24)
           handler: handleInitialize
@@ -52,6 +55,8 @@ dataSources:
       abis:
         - name: AlphixHook
           file: ./abis/AlphixHook.json
+        - name: StateView
+          file: ./abis/StateView.json
       eventHandlers:
         - event: FeeUpdated(indexed bytes32,uint24)
           handler: handleFeeUpdated

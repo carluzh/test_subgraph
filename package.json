@@ -2,15 +2,13 @@
   "name": "alphix_alpha",
   "license": "UNLICENSED",
   "scripts": {
-    "prepare": "node scripts/build-subgraph.js",
-    "codegen": "npm run prepare && graph codegen",
-    "build": "npm run prepare && graph build",
-    "deploy": "npm run prepare && graph deploy --node https://api.studio.thegraph.com/deploy/ alphix_alpha",
-    "create-local": "npm run prepare && graph create --node http://localhost:8020/ alphix_alpha",
+    "codegen": "graph codegen",
+    "build": "graph build",
+    "deploy": "graph deploy --node https://api.studio.thegraph.com/deploy/ alphix_alpha",
+    "create-local": "graph create --node http://localhost:8020/ alphix_alpha",
     "remove-local": "graph remove --node http://localhost:8020/ alphix_alpha",
-    "deploy-local": "npm run prepare && graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 alphix_alpha",
-    "test": "npm run prepare && graph test",
-    "build-config": "node scripts/build-subgraph.js"
+    "deploy-local": "graph deploy --node http://localhost:8020/ --ipfs http://localhost:5001 alphix_alpha",
+    "test": "graph test"
   },
   "dependencies": {
     "@graphprotocol/graph-cli": "0.96.0",
