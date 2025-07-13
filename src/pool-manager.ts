@@ -99,7 +99,9 @@ function getOrCreatePoolDayData(poolId: Bytes, timestamp: BigInt): PoolDayData {
     poolDayData.date = dayStartTimestamp;
     poolDayData.pool = poolId;
     
-    // Initialize raw token volumes (no USD conversion)
+    // Initialize volume tracking (with/without fees)
+    poolDayData.volumeWFeeToken0 = BigDecimal.zero();
+    poolDayData.volumeWFeeToken1 = BigDecimal.zero();
     poolDayData.volumeToken0 = BigDecimal.zero();
     poolDayData.volumeToken1 = BigDecimal.zero();
     
@@ -492,21 +494,54 @@ export function handleSwap(event: SwapEvent): void {
       trackedPool.totalValueLockedToken0.toString(), token0.symbol,
       trackedPool.totalValueLockedToken1.toString(), token1.symbol
   ]);
+  
+  // Log volume breakdown for debugging
+  let inputToken = amount0.lt(BigDecimal.zero()) ? "token0" : "token1";
+  let outputToken = amount0.gt(BigDecimal.zero()) ? "token0" : "token1";
+  log.info("Volume breakdown - Input (w/fees): {} {}, Output (w/o fees): {} {}", [
+      inputToken, 
+      amount0.lt(BigDecimal.zero()) ? amount0.times(BigDecimal.fromString("-1")).toString() : amount1.times(BigDecimal.fromString("-1")).toString(),
+      outputToken,
+      amount0.gt(BigDecimal.zero()) ? amount0.toString() : amount1.toString()
+  ]);
 
-  // Update pool day data with raw token volumes
+  // Update pool day data with directional volume tracking
   let poolDayData = getOrCreatePoolDayData(poolId, swap.timestamp);
   
-  // Add absolute values of swapped amounts to daily volume  
-  let absAmount0 = amount0.lt(BigDecimal.zero()) ? amount0.times(BigDecimal.fromString("-1")) : amount0;
-  let absAmount1 = amount1.lt(BigDecimal.zero()) ? amount1.times(BigDecimal.fromString("-1")) : amount1;
+  // Track volume with fees (input amounts) and without fees (output amounts)
+  // In V4: negative amount = input to pool (includes fees), positive amount = output from pool (excludes fees)
   
-  poolDayData.volumeToken0 = poolDayData.volumeToken0.plus(absAmount0);
-  poolDayData.volumeToken1 = poolDayData.volumeToken1.plus(absAmount1); 
+  if (amount0.lt(BigDecimal.zero())) {
+    // Token0 is input (includes fees) - add absolute value to volumeWFeeToken0
+    let absAmount0 = amount0.times(BigDecimal.fromString("-1"));
+    poolDayData.volumeWFeeToken0 = poolDayData.volumeWFeeToken0.plus(absAmount0);
+  } else if (amount0.gt(BigDecimal.zero())) {
+    // Token0 is output (excludes fees) - add to volumeToken0
+    poolDayData.volumeToken0 = poolDayData.volumeToken0.plus(amount0);
+  }
+  
+  if (amount1.lt(BigDecimal.zero())) {
+    // Token1 is input (includes fees) - add absolute value to volumeWFeeToken1
+    let absAmount1 = amount1.times(BigDecimal.fromString("-1"));
+    poolDayData.volumeWFeeToken1 = poolDayData.volumeWFeeToken1.plus(absAmount1);
+  } else if (amount1.gt(BigDecimal.zero())) {
+    // Token1 is output (excludes fees) - add to volumeToken1
+    poolDayData.volumeToken1 = poolDayData.volumeToken1.plus(amount1);
+  } 
 
   // Update TVL in pool day data to reflect current values after swap
   poolDayData.tvlToken0 = trackedPool.tvlToken0;
   poolDayData.tvlToken1 = trackedPool.tvlToken1;
   poolDayData.currentFeeRateBps = trackedPool.currentFeeRateBps;
+
+  // Log daily volume totals for debugging
+  log.info("Daily volume totals for pool {} - wFee: {} {}, {} {} | w/oFee: {} {}, {} {}", [
+      poolId.toHexString(),
+      poolDayData.volumeWFeeToken0.toString(), token0.symbol,
+      poolDayData.volumeWFeeToken1.toString(), token1.symbol,
+      poolDayData.volumeToken0.toString(), token0.symbol,
+      poolDayData.volumeToken1.toString(), token1.symbol
+  ]);
 
   swap.save();
   poolDayData.save();

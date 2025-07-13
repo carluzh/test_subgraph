@@ -80,9 +80,13 @@ type PoolDayData @entity(immutable: false) {
   date: Int!                  # Unix timestamp for the start of the day
   pool: TrackedPool!          # Link to the Pool entity
   
-  # Raw token volumes (no USD conversion)
-  volumeToken0: BigDecimal!   # Total volume in token0 for this day
-  volumeToken1: BigDecimal!   # Total volume in token1 for this day
+  # Volume with fees (input amounts) - for APR calculations
+  volumeWFeeToken0: BigDecimal!   # Total volume in token0 including fees (when token0 is input)
+  volumeWFeeToken1: BigDecimal!   # Total volume in token1 including fees (when token1 is input)
+  
+  # Volume without fees (output amounts) - for Dynamic Fee + Pool Analytics
+  volumeToken0: BigDecimal!   # Total volume in token0 excluding fees (when token0 is output)
+  volumeToken1: BigDecimal!   # Total volume in token1 excluding fees (when token1 is output)
   
   # TVL at end of day (raw token amounts)
   tvlToken0: BigDecimal!      # Total Value Locked in token0 at end of day
